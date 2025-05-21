@@ -7,8 +7,11 @@ from pathlib import Path
 from model import Model
 from data_module import DataModule
 
+import torch
 
 def main(args):
+
+    torch.set_float32_matmul_precision('medium')  # Fixes Tensor Core warning
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
     

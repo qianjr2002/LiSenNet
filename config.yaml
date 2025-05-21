@@ -11,12 +11,12 @@ dataset_config:
   batch_size: 4
   cut_len: 32000  # length of training samples: 2s
   num_workers: 4  # dataloader workers
-  train_src_dir: <path-to-noisy-train-dir>
-  train_tgt_dir: <path-to-clean-train-dir>
-  val_src_dir: <path-to-noisy-val-dir>
-  val_tgt_dir: <path-to-clean-val-dir>
-  test_src_dir: <path-to-noisy-test-dir>
-  test_tgt_dir: <path-to-clean-test-dir>
+  train_src_dir: /home/qianjingrui0827/data/VCTK-DEMAND/train/noisy
+  train_tgt_dir: /home/qianjingrui0827/data/VCTK-DEMAND/train/clean
+  val_src_dir: /home/qianjingrui0827/data/VCTK-DEMAND/val/noisy
+  val_tgt_dir: /home/qianjingrui0827/data/VCTK-DEMAND/val/clean
+  test_src_dir: /home/qianjingrui0827/data/VCTK-DEMAND/test/noisy
+  test_tgt_dir: /home/qianjingrui0827/data/VCTK-DEMAND/test/clean
 
 
 # training config

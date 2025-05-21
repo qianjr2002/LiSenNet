@@ -8,8 +8,12 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from model import Model
 from data_module import DataModule
 
+import torch
+
 
 def main(args):
+    torch.set_float32_matmul_precision('medium')  # Fixes Tensor Core warning
+
     pl.seed_everything(3407)
 
     with open(args.config, 'r') as f:

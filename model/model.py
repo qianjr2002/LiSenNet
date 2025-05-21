@@ -30,7 +30,7 @@ class Model(pl.LightningModule):
         results = self.generator(src, tgt)
         return results
 
-    def training_step(self, batch, batch_idx, optimizer_idx=None):
+    def training_step(self, batch, batch_idx): # optimizer_idx=None
         g_opt, d_opt = self.optimizers()
 
         src, tgt, length, _ = batch
