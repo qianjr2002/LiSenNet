@@ -175,4 +175,5 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-log/
+*.ckpt
+!log/ckpts/version_0/epoch=99-last.ckpt

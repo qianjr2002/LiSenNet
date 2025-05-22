@@ -37,3 +37,14 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     sys.exit(main(args))
+
+'''
+ CUDA_VISIBLE_DEVICES=3 python test.py --config ./config.yaml --ckpt_path  log/ckpts/version_0/epoch\=99-last.ckpt
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃        Test metric        ┃       DataLoader 0        ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│         test_pesq         │     3.055063247680664     │
+│        test_sisnr         │    12.762089729309082     │
+│         test_stoi         │    0.9369952082633972     │
+└───────────────────────────┴───────────────────────────┘
+'''

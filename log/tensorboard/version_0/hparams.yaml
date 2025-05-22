@@ -1,0 +1,51 @@
+config:
+  accelerator: gpu
+  devices:
+  - 0
+  log_dir: ./log
+  resume: null
+  dataset_config:
+    batch_size: 4
+    cut_len: 32000
+    num_workers: 4
+    train_src_dir: /home/qianjingrui0827/data/VCTK-DEMAND/train/noisy
+    train_tgt_dir: /home/qianjingrui0827/data/VCTK-DEMAND/train/clean
+    val_src_dir: /home/qianjingrui0827/data/VCTK-DEMAND/val/noisy
+    val_tgt_dir: /home/qianjingrui0827/data/VCTK-DEMAND/val/clean
+    test_src_dir: /home/qianjingrui0827/data/VCTK-DEMAND/test/noisy
+    test_tgt_dir: /home/qianjingrui0827/data/VCTK-DEMAND/test/clean
+  max_epochs: 100
+  val_check_interval: 0.5
+  gradient_clip_val: 5.0
+  g_opt:
+    lr: 0.0005
+    betas:
+    - 0.8
+    - 0.99
+  d_opt:
+    lr: 0.0005
+    betas:
+    - 0.8
+    - 0.99
+  g_sch:
+    step_size: 1
+    gamma: 0.98
+    verbose: true
+  d_sch:
+    step_size: 1
+    gamma: 0.98
+    verbose: true
+  model_config:
+    num_channels: 16
+    n_blocks: 2
+    n_fft: 512
+    hop_length: 256
+    compress_factor: 0.3
+  weights:
+    complex: 0.1
+    mag: 0.9
+    adv: 0.05
+  ckpt_dir: !!python/object/apply:pathlib.PosixPath
+  - log
+  - ckpts
+  - version_0

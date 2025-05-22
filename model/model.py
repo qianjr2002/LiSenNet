@@ -91,7 +91,10 @@ class Model(pl.LightningModule):
 
         pesq_score = pesq(16000, tgt, est, 'wb')
         stoi_score = stoi(tgt, est, 16000)
-        self.log_dict({'test_pesq': pesq_score, 'test_stoi': stoi_score}, on_step=False, on_epoch=True)
+        from torchmetrics.audio import ScaleInvariantSignalNoiseRatio
+        sisnr = ScaleInvariantSignalNoiseRatio()
+        sisnr_score = sisnr(torch.tensor(est), torch.tensor(tgt))
+        self.log_dict({'test_pesq': pesq_score, 'test_stoi': stoi_score, 'test_sisnr': sisnr_score}, on_step=False, on_epoch=True)
 
         if 'save_enhanced' in self.config and self.config['save_enhanced'] is not None:
             est = est / (np.max(np.abs(est)) + 1e-5)
