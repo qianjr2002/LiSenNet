@@ -1,8 +1,146 @@
-from .dpr_layer import DPR, CustomLayerNorm
+# from model.generator.generator import LiSenNet
 import torch
 import torch.nn as nn
-from torchaudio.functional import melscale_fbanks
 
+# from .dpr_layer import DPR, CustomLayerNorm
+from torchaudio.functional import melscale_fbanks
+from torch.nn import init
+from torch.nn.parameter import Parameter
+
+
+
+class CustomLayerNorm(nn.Module):
+    def __init__(self, input_dims, stat_dims=(1,), num_dims=4, eps=1e-5):
+        super().__init__()
+        assert isinstance(input_dims, tuple) and isinstance(stat_dims, tuple)
+        assert len(input_dims) == len(stat_dims)
+        param_size = [1] * num_dims
+        for input_dim, stat_dim in zip(input_dims, stat_dims):
+            param_size[stat_dim] = input_dim
+        self.gamma = Parameter(torch.Tensor(*param_size).to(torch.float32))
+        self.beta = Parameter(torch.Tensor(*param_size).to(torch.float32))
+        init.ones_(self.gamma)
+        init.zeros_(self.beta)
+        self.eps = eps
+        self.stat_dims = stat_dims
+        self.num_dims = num_dims
+
+    def forward(self, x):
+        assert x.ndim == self.num_dims, print(
+            "Expect x to have {} dimensions, but got {}".format(self.num_dims, x.ndim))
+
+        mu_ = x.mean(dim=self.stat_dims, keepdim=True)  # [B,1,T,F]
+        std_ = torch.sqrt(
+            x.var(dim=self.stat_dims, unbiased=False, keepdim=True) + self.eps
+        )  # [B,1,T,F]
+        x_hat = ((x - mu_) / std_) * self.gamma + self.beta
+        return x_hat
+
+
+class RNN(nn.Module):
+    def __init__(
+            self,
+            emb_dim,
+            hidden_dim,
+            dropout_p=0.1,
+            bidirectional=False,
+    ):
+        super().__init__()
+        self.rnn = nn.GRU(emb_dim, hidden_dim, 1, batch_first=True, bidirectional=bidirectional)
+        if bidirectional:
+            self.dense = nn.Linear(hidden_dim * 2, emb_dim)
+        else:
+            self.dense = nn.Linear(hidden_dim, emb_dim)
+    
+    def forward(self, x):
+        # x:(b,t,d)
+        x,_ = self.rnn(x)
+        x = self.dense(x)
+        return x
+
+
+class DualPathRNN(nn.Module):
+    def __init__(
+            self,
+            emb_dim,
+            hidden_dim,
+            n_freqs=32,
+            dropout_p=0.1,
+    ):
+        super().__init__()
+        self.intra_norm = nn.LayerNorm((n_freqs, emb_dim))
+        self.intra_rnn_attn = RNN(emb_dim, hidden_dim // 2, dropout_p, bidirectional=True)
+
+        self.inter_norm = nn.LayerNorm((n_freqs, emb_dim))
+        self.inter_rnn_attn = RNN(emb_dim, hidden_dim, dropout_p, bidirectional=False)
+
+
+    def forward(self, x):
+        # x:(b,d,t,f)
+        B, D, T, F = x.size()
+        x = x.permute(0, 2, 3, 1)  # (b,t,f,d)
+
+        x_res = x
+        x = self.intra_norm(x)
+        x = x.reshape(B * T, F, D)  # (b*t,f,d)
+        x = self.intra_rnn_attn(x)
+        x = x.reshape(B, T, F, D)
+        x = x + x_res
+
+        x_res = x
+        x = self.inter_norm(x)
+        x = x.permute(0, 2, 1, 3)  # (b,f,t,d)
+        x = x.reshape(B * F, T, D)
+        x = self.inter_rnn_attn(x)
+        x = x.reshape(B, F, T, D).permute(0, 2, 1, 3) # (b,t,f,d)
+        x = x + x_res
+
+        x = x.permute(0, 3, 1, 2)
+        return x
+
+
+class ConvolutionalGLU(nn.Module):
+    def __init__(self, emb_dim, n_freqs=32, expansion_factor=2, dropout_p=0.1):
+        super().__init__()
+        hidden_dim = int(emb_dim * expansion_factor)
+        self.norm = CustomLayerNorm((emb_dim, n_freqs), stat_dims=(1, 3))
+        self.fc1 = nn.Conv2d(emb_dim, hidden_dim * 2, 1)
+        self.dwconv = nn.Sequential(
+            nn.ConstantPad2d((1, 1, 2, 0), value=0.0),
+            nn.Conv2d(hidden_dim, hidden_dim, 3, 1, groups=hidden_dim),
+        )
+        self.act = nn.Mish()
+        self.fc2 = nn.Conv2d(hidden_dim, emb_dim, 1)
+        self.dropout = nn.Dropout(dropout_p)
+
+    def forward(self, x):
+        # x:(b,d,t,f)
+        res = x
+        x = self.norm(x)
+        x, v = self.fc1(x).chunk(2, dim=1)
+        x = self.act(self.dwconv(x)) * v
+        x = self.dropout(x)
+        x = self.fc2(x)
+        x = x + res
+        return x
+
+
+class DPR(nn.Module):
+    def __init__(
+            self,
+            emb_dim=16,
+            hidden_dim=24,
+            n_freqs=32,
+            dropout_p=0.1,
+    ):
+        super().__init__()
+        self.dp_rnn_attn = DualPathRNN(emb_dim, hidden_dim, n_freqs, dropout_p)
+        self.conv_glu = ConvolutionalGLU(emb_dim, n_freqs=n_freqs, expansion_factor=2, dropout_p=dropout_p)
+
+    def forward(self, x):
+        x = self.dp_rnn_attn(x)
+        x = self.conv_glu(x)
+        return x
 
 
 class LearnableSigmoid2d(nn.Module):
@@ -176,8 +314,7 @@ class Encoder(nn.Module):
         x = self.conv_4(x)
         out_list.append(x)  # 32
         return out_list
-
-
+    
 class CBAM(nn.Module):
     def __init__(self, channels, reduction_ratio=16):
         super().__init__()
@@ -195,7 +332,7 @@ class CBAM(nn.Module):
 
     def forward(self, x):
         # Channel attention
-        ca = self.channel_attention(x) # x torch.Size([1, 16, 127, 32])
+        ca = self.channel_attention(x)
         x = x * ca
 
         # Spatial attention
@@ -220,23 +357,28 @@ class MaskDecoder(nn.Module):
         )
         self.lsigmoid = LearnableSigmoid2d(num_features, beta=beta)
 
-        self.cbam_1 = CBAM(channels=16, reduction_ratio=6)
-        self.cbam_2 = CBAM(channels=12, reduction_ratio=6)
-        self.cbam_3 = CBAM(channels=8, reduction_ratio=6)
+        self.cbam_1 = CBAM(channels=24, reduction_ratio=6)  # Add CBAM here
+        self.cbam_2 = CBAM(channels=18, reduction_ratio=6)
+        self.cbam_3 = CBAM(channels=12, reduction_ratio=6)
+
 
     def forward(self, x, encoder_out_list):
-        x = self.up1(torch.cat([self.cbam_1(x), encoder_out_list.pop()], dim=1))  # 64
+        # print(x.shape)
+        x = self.up1(torch.cat([self.cbam_1(x) , encoder_out_list.pop()], dim=1))  # 64
+        # print(x.shape)
         x = self.up2(torch.cat([self.cbam_2(x), encoder_out_list.pop()], dim=1))  # 128
+        # print(x.shape)
         x = self.up3(torch.cat([self.cbam_3(x), encoder_out_list.pop()], dim=1))  # 256
+        # print(x.shape)
         x = self.mask_conv(x)  # (B,out_channel,T,F)
         x = x.permute(0, 3, 2, 1)  # (B,F,T,out_channel)
         x = self.lsigmoid(x).permute(0, 3, 2, 1)
         return x
 
 
-class LiSenNet(nn.Module):
+class LiSenNetPlus(nn.Module):
     def __init__(self, num_channels=16, n_blocks=2, n_fft=512, hop_length=256, compress_factor=0.3):
-        super(LiSenNet, self).__init__()
+        super(LiSenNetPlus, self).__init__()
         self.n_fft = n_fft
         self.n_freqs = n_fft // 2 + 1
         self.hop_length = hop_length
@@ -353,8 +495,8 @@ class LiSenNet(nn.Module):
         src_gd = self.cal_gd(src_pha)
         src_ifd = self.cal_ifd(src_pha)
 
-        tgt_spec = self.power_compress(self.apply_stft(tgt))  # (B,T,F)
-        tgt_mag = tgt_spec.abs()
+        # tgt_spec = self.power_compress(self.apply_stft(tgt))  # (B,T,F)
+        # tgt_mag = tgt_spec.abs()
 
         x = torch.stack([src_mag, src_gd / torch.pi, src_ifd / torch.pi], dim=1)  # (B,3,T,F)
 
@@ -368,13 +510,87 @@ class LiSenNet(nn.Module):
         est_spec = torch.complex(est_mag * est_pha.cos(), est_mag * est_pha.sin())
         est = self.apply_istft(self.power_uncompress(est_spec), length=tgt.size(-1))
 
-        results = {
-            'tgt': tgt,
-            'tgt_spec': tgt_spec,
-            'tgt_mag': tgt_mag,
-            'est': est,
-            'est_spec': est_spec,
-            'est_mag': est_mag,
-        }
+        # results = {
+        #     'tgt': tgt,
+        #     'tgt_spec': tgt_spec,
+        #     'tgt_mag': tgt_mag,
+        #     'est': est,
+        #     'est_spec': est_spec,
+        #     'est_mag': est_mag,
+        # }
 
-        return results
+        # return results
+        # return tgt, tgt_spec, tgt_mag, est, est_spec, est_mag
+        return est
+
+    
+if __name__ == "__main__":
+    # model = LiSenNet(num_channels=16, n_blocks=2, n_fft=512, hop_length=256, compress_factor=0.3)
+    # x = torch.randn(1, 16000)  # Note: shape should be (batch, time)
+    # y = model(x)
+    # print(y['tgt'].shape)
+    # # torch.Size([1, 16000])
+
+    # from ptflops import get_model_complexity_info
+            
+    # flops, params = get_model_complexity_info(model, (16000,), as_strings=True, print_per_layer_stat=True, verbose=True)
+    # print('flops: ', flops)
+    # print('params: ', params)
+    # # flops:  55.77 MMac
+    # # params:  36.78 k
+
+    # model = LiSenNetPlus(num_channels=24, n_blocks=2, n_fft=512, hop_length=256, compress_factor=0.3)
+    # x = torch.randn(1, 16000)  # Note: shape should be (batch, time)
+    # y = model(x)
+    # print(y.shape)
+    # # torch.Size([1, 16000])
+
+    # from ptflops import get_model_complexity_info
+            
+    # flops, params = get_model_complexity_info(model, (16000,), as_strings=True, print_per_layer_stat=True, verbose=True)
+    # print('flops: ', flops)
+    # print('params: ', params)
+    # # flops:  120.82 MMac
+    # # params:  74.7 k
+
+    model = LiSenNetPlus(num_channels=24, n_blocks=4, n_fft=512, hop_length=256, compress_factor=0.3)
+    x = torch.randn(1, 16000)  # Note: shape should be (batch, time)
+    y = model(x)
+    print(y.shape)
+    # torch.Size([1, 16000])
+
+    from ptflops import get_model_complexity_info
+            
+    flops, params = get_model_complexity_info(model, (16000,), as_strings=True, print_per_layer_stat=True, verbose=True)
+    print('flops: ', flops)
+    print('params: ', params)
+    # flops:  192.72 MMac
+    # params:  118.48 k
+
+    # use CBAM num_channels=24
+    # flops:  193.91 MMac
+    # params:  119.17 k
+
+    # use CBAM 1 2 3
+    # flops:  194.55 MMac
+    # params:  119.19 k
+
+    # use MultiScaleAttention num_channels=16
+    # flops:  126.16 MMac
+    # params:  77.8 k
+
+    # model = LiSenNet(num_channels=32, n_blocks=2, n_fft=512, hop_length=256, compress_factor=0.3)
+    # x = torch.randn(1, 16000)  # Note: shape should be (batch, time)
+    # y = model(x)
+    # print(y.shape)
+    # # torch.Size([1, 16000])
+
+    # from ptflops import get_model_complexity_info
+            
+    # flops, params = get_model_complexity_info(model, (16000,), as_strings=True, print_per_layer_stat=True, verbose=True)
+    # print('flops: ', flops)
+    # print('params: ', params)
+    # # flops:  210.7 MMac
+    # # params:  126.22 k
+
+
