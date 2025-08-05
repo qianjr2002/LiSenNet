@@ -8,7 +8,6 @@ from torch.nn import init
 from torch.nn.parameter import Parameter
 
 
-
 class CustomLayerNorm(nn.Module):
     def __init__(self, input_dims, stat_dims=(1,), num_dims=4, eps=1e-5):
         super().__init__()
@@ -314,32 +313,6 @@ class Encoder(nn.Module):
         x = self.conv_4(x)
         out_list.append(x)  # 32
         return out_list
-    
-class CBAM(nn.Module):
-    def __init__(self, channels, reduction_ratio=16):
-        super().__init__()
-        self.channel_attention = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(channels, channels // reduction_ratio, kernel_size=1),
-            nn.ReLU(),
-            nn.Conv2d(channels // reduction_ratio, channels, kernel_size=1),
-            nn.Sigmoid()
-        )
-        self.spatial_attention = nn.Sequential(
-            nn.Conv2d(2, 1, kernel_size=7, padding=3),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        # Channel attention
-        ca = self.channel_attention(x)
-        x = x * ca
-
-        # Spatial attention
-        sa = torch.cat([x.mean(dim=1, keepdim=True), x.max(dim=1, keepdim=True)[0]], dim=1)
-        sa = self.spatial_attention(sa)
-        x = x * sa
-        return x
 
 
 class MaskDecoder(nn.Module):
@@ -357,28 +330,19 @@ class MaskDecoder(nn.Module):
         )
         self.lsigmoid = LearnableSigmoid2d(num_features, beta=beta)
 
-        self.cbam_1 = CBAM(channels=24, reduction_ratio=6)  # Add CBAM here
-        self.cbam_2 = CBAM(channels=18, reduction_ratio=6)
-        self.cbam_3 = CBAM(channels=12, reduction_ratio=6)
-
-
     def forward(self, x, encoder_out_list):
-        # print(x.shape)
-        x = self.up1(torch.cat([self.cbam_1(x) , encoder_out_list.pop()], dim=1))  # 64
-        # print(x.shape)
-        x = self.up2(torch.cat([self.cbam_2(x), encoder_out_list.pop()], dim=1))  # 128
-        # print(x.shape)
-        x = self.up3(torch.cat([self.cbam_3(x), encoder_out_list.pop()], dim=1))  # 256
-        # print(x.shape)
+        x = self.up1(torch.cat([x, encoder_out_list.pop()], dim=1))  # 64
+        x = self.up2(torch.cat([x, encoder_out_list.pop()], dim=1))  # 128
+        x = self.up3(torch.cat([x, encoder_out_list.pop()], dim=1))  # 256
         x = self.mask_conv(x)  # (B,out_channel,T,F)
         x = x.permute(0, 3, 2, 1)  # (B,F,T,out_channel)
         x = self.lsigmoid(x).permute(0, 3, 2, 1)
         return x
 
 
-class LiSenNetPlus(nn.Module):
+class LiSenNet(nn.Module):
     def __init__(self, num_channels=16, n_blocks=2, n_fft=512, hop_length=256, compress_factor=0.3):
-        super(LiSenNetPlus, self).__init__()
+        super(LiSenNet, self).__init__()
         self.n_fft = n_fft
         self.n_freqs = n_fft // 2 + 1
         self.hop_length = hop_length
@@ -525,72 +489,23 @@ class LiSenNetPlus(nn.Module):
 
     
 if __name__ == "__main__":
-    # model = LiSenNet(num_channels=16, n_blocks=2, n_fft=512, hop_length=256, compress_factor=0.3)
-    # x = torch.randn(1, 16000)  # Note: shape should be (batch, time)
-    # y = model(x)
-    # print(y['tgt'].shape)
-    # # torch.Size([1, 16000])
-
-    # from ptflops import get_model_complexity_info
-            
-    # flops, params = get_model_complexity_info(model, (16000,), as_strings=True, print_per_layer_stat=True, verbose=True)
-    # print('flops: ', flops)
-    # print('params: ', params)
-    # # flops:  55.77 MMac
-    # # params:  36.78 k
-
-    # model = LiSenNetPlus(num_channels=24, n_blocks=2, n_fft=512, hop_length=256, compress_factor=0.3)
-    # x = torch.randn(1, 16000)  # Note: shape should be (batch, time)
-    # y = model(x)
-    # print(y.shape)
-    # # torch.Size([1, 16000])
-
-    # from ptflops import get_model_complexity_info
-            
-    # flops, params = get_model_complexity_info(model, (16000,), as_strings=True, print_per_layer_stat=True, verbose=True)
-    # print('flops: ', flops)
-    # print('params: ', params)
-    # # flops:  120.82 MMac
-    # # params:  74.7 k
-
-    model = LiSenNetPlus(num_channels=24, n_blocks=4, n_fft=512, hop_length=256, compress_factor=0.3)
+    from ptflops import get_model_complexity_info
+    model_1 = LiSenNet(num_channels=24, n_blocks=2, n_fft=512, hop_length=256, compress_factor=0.3)
     x = torch.randn(1, 16000)  # Note: shape should be (batch, time)
-    y = model(x)
+    y = model_1(x)
+    print(y.shape)
+    # torch.Size([1, 16000])
+            
+    flops, params = get_model_complexity_info(model_1, (16000,), as_strings=True, print_per_layer_stat=False, verbose=True)
+    print('flops: ', flops, 'params: ', params)
+    # flops:  120.82 MMac params:  74.7 k
+
+    model_2 = LiSenNet(num_channels=16, n_blocks=2, n_fft=512, hop_length=256, compress_factor=0.3)
+    x = torch.randn(1, 16000)  # Note: shape should be (batch, time)
+    y = model_1(x)
     print(y.shape)
     # torch.Size([1, 16000])
 
-    from ptflops import get_model_complexity_info
-            
-    flops, params = get_model_complexity_info(model, (16000,), as_strings=True, print_per_layer_stat=True, verbose=True)
-    print('flops: ', flops)
-    print('params: ', params)
-    # flops:  192.72 MMac
-    # params:  118.48 k
-
-    # use CBAM num_channels=24
-    # flops:  193.91 MMac
-    # params:  119.17 k
-
-    # use CBAM 1 2 3
-    # flops:  194.55 MMac
-    # params:  119.19 k
-
-    # use MultiScaleAttention num_channels=16
-    # flops:  126.16 MMac
-    # params:  77.8 k
-
-    # model = LiSenNet(num_channels=32, n_blocks=2, n_fft=512, hop_length=256, compress_factor=0.3)
-    # x = torch.randn(1, 16000)  # Note: shape should be (batch, time)
-    # y = model(x)
-    # print(y.shape)
-    # # torch.Size([1, 16000])
-
-    # from ptflops import get_model_complexity_info
-            
-    # flops, params = get_model_complexity_info(model, (16000,), as_strings=True, print_per_layer_stat=True, verbose=True)
-    # print('flops: ', flops)
-    # print('params: ', params)
-    # # flops:  210.7 MMac
-    # # params:  126.22 k
-
-
+    flops, params = get_model_complexity_info(model_2, (16000,), as_strings=True, print_per_layer_stat=False, verbose=True)
+    print('flops: ', flops, 'params: ', params)
+    # flops:  55.77 MMac params:  36.78 k
