@@ -502,7 +502,7 @@ if __name__ == "__main__":
 
     model_2 = LiSenNet(num_channels=16, n_blocks=2, n_fft=512, hop_length=256, compress_factor=0.3)
     x = torch.randn(1, 16000)  # Note: shape should be (batch, time)
-    y = model_1(x)
+    y = model_2(x)
     print(y.shape)
     # torch.Size([1, 16000])
 
